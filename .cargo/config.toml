@@ -1,0 +1,4 @@
+[target.x86_64-pc-windows-msvc]
+# Import only referenced Windows functions. The umbrella windows-targets import
+# archive also exports ICU names, which collide with Skia's bundled ICU in LLD.
+rustflags = ["--cfg", "windows_raw_dylib"]

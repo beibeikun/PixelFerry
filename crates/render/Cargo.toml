@@ -1,0 +1,12 @@
+[package]
+name = "pixelferry-render"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+pixelferry-core = { path = "../core" }
+pixelferry-services = { path = "../services" }
+anyhow.workspace = true
+chrono.workspace = true
+serde.workspace = true
+skia-safe = { version = "0.84", features = ["textlayout"] }

@@ -1,0 +1,6 @@
+{
+  "$schema":"https://schema.tauri.app/config/2", "productName":"PixelFerry", "version":"0.2.0", "identifier":"local.pixelferry.desktop",
+  "build":{"frontendDist":"../../frontend/dist","devUrl":"http://127.0.0.1:1420"},
+  "app":{"windows":[{"label":"main","title":"PixelFerry · 像素渡轮","width":1520,"height":980,"minWidth":1140,"minHeight":740,"backgroundColor":"#f8f6f0","dragDropEnabled":false}],"security":{"csp":"default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src ipc: http://ipc.localhost; script-src 'self'","capabilities":[{"identifier":"main-capability","windows":["main"],"permissions":["core:default"]}]}},
+  "bundle":{"active":false,"icon":["icons/icon.ico"]}
+}
