@@ -1,4 +1,11 @@
-import { useEffect, useState, useRef, type ReactNode } from "react";
+import {
+  useEffect,
+  useState,
+  useRef,
+  lazy,
+  Suspense,
+  type ReactNode,
+} from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   Anchor,
@@ -15,6 +22,7 @@ import {
   EyeOff,
   FolderOpen,
   Gauge,
+  GripVertical,
   Image as ImageIcon,
   Layers,
   Loader2,
@@ -69,6 +77,7 @@ import {
 } from "@/components/ui/tooltip";
 import { Textarea } from "@/components/ui/textarea";
 import { PixelCanvas } from "@/components/Canvas";
+import { convertToRichText, plainSummary } from "@/lib/rich-text";
 import { api, native } from "@/lib/api";
 import {
   active,
@@ -102,39 +111,42 @@ const icons: Record<Kind, typeof Type> = {
   video: Video,
   deepseek: Sparkles,
 };
+const RichTextEditor = lazy(() =>
+  import("@/components/RichTextEditor").then((module) => ({
+    default: module.RichTextEditor,
+  })),
+);
 const empty: Snapshot = {
   version: 1,
   devices: [],
   statuses: [],
   data: { sensors: [], deepseek: initialDeepSeek },
 };
+function savedOutputTarget(): [string, string] | null {
+  try {
+    const value: unknown = JSON.parse(
+      localStorage.getItem("pixelferry-output-target") ?? "null",
+    );
+    if (
+      Array.isArray(value) &&
+      value.length === 2 &&
+      value.every((id) => typeof id === "string" && id.length > 0)
+    )
+      return value as [string, string];
+  } catch {
+    // A damaged or unavailable preference must not prevent startup.
+  }
+  return null;
+}
 function Ferry({ small = false }: { small?: boolean }) {
   return (
-    <svg
-      viewBox="0 0 64 64"
+    <img
+      src="/logo.svg"
       width={small ? 28 : 44}
       height={small ? 28 : 44}
+      alt=""
       aria-hidden="true"
-    >
-      <path d="M10 35h44l-9 15H21z" fill="currentColor" />
-      <path d="M23 15h19v20H23z" fill="currentColor" opacity=".75" />
-      <path d="M17 25h30v10H17z" fill="currentColor" />
-      <rect
-        x="28"
-        y="19"
-        width="8"
-        height="7"
-        rx="1"
-        fill="var(--background)"
-      />
-      <path
-        d="M9 54q6-5 12 0t12 0t12 0t12 0"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="3"
-        strokeLinecap="round"
-      />
-    </svg>
+    />
   );
 }
 function IconButton({
@@ -290,7 +302,7 @@ export function App() {
   const [snapshot, setSnapshot] = useState<Snapshot>(empty),
     [route, setRoute] = useState<"studio" | "devices" | "assets">("studio"),
     [mode, setMode] = useState<"edit" | "output">("edit"),
-    [target, setTarget] = useState<[string, string] | null>(null),
+    [target, setTarget] = useState<[string, string] | null>(savedOutputTarget),
     [theme, setTheme] = useState(
       () => localStorage.getItem("pixelferry-theme") ?? "light",
     ),
@@ -298,10 +310,28 @@ export function App() {
     [info, setInfo] = useState({ version: "0.2.0", simulate: false }),
     [notice, setNotice] = useState(""),
     [zoom, setZoom] = useState(1),
-    [rightTab, setRightTab] = useState("properties"),
     [exportAll, setExportAll] = useState(false);
   const selection = useRef(target);
   selection.current = mode === "output" ? target : null;
+  useEffect(() => {
+    if (!target) return;
+    try {
+      localStorage.setItem("pixelferry-output-target", JSON.stringify(target));
+    } catch {
+      // Keep the screen usable even if preference storage is unavailable.
+    }
+  }, [target]);
+  useEffect(() => {
+    if (target || !doc) return;
+    // Existing installations have bindings but no saved inspector selection yet.
+    const binding = doc.bindings.find((b) =>
+      snapshot.devices.some(
+        (d) =>
+          d.id === b.deviceId && d.screens.some((s) => s.id === b.screenId),
+      ),
+    );
+    if (binding) setTarget([binding.deviceId, binding.screenId]);
+  }, [doc, snapshot.devices, target]);
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
     localStorage.setItem("pixelferry-theme", theme);
@@ -764,7 +794,6 @@ export function App() {
                                   onClick={() => {
                                     s.add(kind);
                                     setMode("edit");
-                                    setRightTab("properties");
                                   }}
                                 />
                               }
@@ -1000,21 +1029,15 @@ export function App() {
               )}
             </main>
             <aside className="inspector">
-              <Tabs
-                value={rightTab}
-                onValueChange={(v) => setRightTab(v as string)}
+              <section
+                className="inspector-pane properties-pane"
+                aria-label="属性"
               >
-                <TabsList className="inspector-tabs">
-                  <TabsTrigger value="properties">
-                    <SlidersHorizontal size={14} />
-                    属性
-                  </TabsTrigger>
-                  <TabsTrigger value="layers">
-                    <Layers size={14} />
-                    图层
-                  </TabsTrigger>
-                </TabsList>
-                <TabsContent value="properties">
+                <h2 className="inspector-heading">
+                  <SlidersHorizontal size={14} />
+                  属性
+                </h2>
+                <div className="inspector-scroll">
                   <Properties
                     doc={doc}
                     snapshot={snapshot}
@@ -1022,11 +1045,17 @@ export function App() {
                     setAccount={() => setAccount(true)}
                     route={route}
                   />
-                </TabsContent>
-                <TabsContent value="layers">
-                  <LayerList doc={doc} />
-                </TabsContent>
-              </Tabs>
+                </div>
+              </section>
+              <section className="inspector-pane layers-pane" aria-label="图层">
+                <h2 className="inspector-heading">
+                  <Layers size={14} />
+                  图层
+                </h2>
+                <div className="inspector-scroll">
+                  <LayerList key={doc.activeSceneId} doc={doc} />
+                </div>
+              </section>
             </aside>
           </div>
         )}
@@ -1092,6 +1121,16 @@ function Properties({
   setAccount: () => void;
   route: string;
 }) {
+  const [editingText, setEditingText] = useState<string | null>(null);
+  const editingLayer = active(doc).layers.find(
+    (layer) => layer.id === editingText,
+  );
+  useEffect(() => {
+    useStore.setState({ textEditorOpen: !!editingLayer });
+    return () => {
+      useStore.setState({ textEditorOpen: false });
+    };
+  }, [editingLayer?.id]);
   const s = useStore(),
     scene = active(doc),
     selected = scene.layers.filter((l) => s.selected.includes(l.id)),
@@ -1121,6 +1160,33 @@ function Properties({
   }
   return (
     <div className="inspector-content">
+      {editingLayer && (
+        <Suspense
+          fallback={
+            <p role="status" className="field-help">
+              正在载入文字编辑器…
+            </p>
+          }
+        >
+          <RichTextEditor
+            key={editingLayer.id}
+            layer={editingLayer}
+            doc={doc}
+            snapshot={snapshot}
+            onClose={() => setEditingText(null)}
+            onApply={(rich) => {
+              if (
+                JSON.stringify(editingLayer.richText) !== JSON.stringify(rich)
+              )
+                s.patch(editingLayer.id, {
+                  richText: rich,
+                  text: plainSummary(rich),
+                });
+              setEditingText(null);
+            }}
+          />
+        </Suspense>
+      )}
       {route === "devices" ? (
         <OutputSettings doc={doc} snapshot={snapshot} target={target} />
       ) : (
@@ -1220,11 +1286,25 @@ function Properties({
                 <section className="property-section">
                   <h3>文字样式</h3>
                   {l.type === "text" && (
-                    <Textarea
-                      aria-label="文字内容"
-                      value={l.text}
-                      onChange={(e) => patch({ text: e.target.value })}
-                    />
+                    <>
+                      {!l.richText && (
+                        <Textarea
+                          aria-label="文字内容"
+                          value={l.text}
+                          onChange={(e) => patch({ text: e.target.value })}
+                        />
+                      )}
+                      {l.richText && (
+                        <p className="rich-summary">{l.text || "空文字"}</p>
+                      )}
+                      <Button
+                        variant="outline"
+                        onClick={() => setEditingText(l.id)}
+                      >
+                        <Type size={14} />
+                        编辑文字与参数
+                      </Button>
+                    </>
                   )}
                   <div className="property-grid">
                     <NumberField
@@ -1249,7 +1329,7 @@ function Properties({
                     onChange={(e) => patch({ fontFamily: e.target.value })}
                   />
                   <SelectField
-                    label="文字对齐"
+                    label="水平对齐"
                     value={l.align}
                     onChange={(v) => patch({ align: v as Layer["align"] })}
                   >
@@ -1257,12 +1337,42 @@ function Properties({
                     <option value="center">居中</option>
                     <option value="right">右对齐</option>
                   </SelectField>
+                  <SelectField
+                    label="垂直对齐"
+                    value={l.verticalAlign ?? "middle"}
+                    onChange={(v) =>
+                      patch({ verticalAlign: v as Layer["verticalAlign"] })
+                    }
+                  >
+                    <option value="top">顶部对齐</option>
+                    <option value="middle">垂直居中</option>
+                    <option value="bottom">底部对齐</option>
+                  </SelectField>
                   {l.type === "sensor" && (
                     <ToggleField
                       label="显示整数"
                       checked={l.text === "integer"}
                       onChange={(v) => patch({ text: v ? "integer" : "" })}
                     />
+                  )}
+                  {["sensor", "deepseek"].includes(l.type) && (
+                    <Button
+                      variant="outline"
+                      disabled={l.type === "sensor" && !l.sensorId}
+                      onClick={() => {
+                        try {
+                          s.patch(
+                            l.id,
+                            convertToRichText(l, snapshot.data.sensors),
+                          );
+                          setEditingText(l.id);
+                        } catch (e) {
+                          useStore.setState({ error: String(e) });
+                        }
+                      }}
+                    >
+                      转换为混排文字
+                    </Button>
                   )}
                 </section>
               )}
@@ -1639,9 +1749,9 @@ function OutputSettings({
         <div className="inspector-empty">
           <Monitor size={23} />
           <p>
-            前往设备港口，
+            {target ? "上次选择的屏幕尚未连接，" : "前往设备港口，"}
             <br />
-            选择一块屏幕。
+            {target ? "连接后自动恢复，也可在设备港口切换。" : "选择一块屏幕。"}
           </p>
         </div>
       ) : (
@@ -1778,6 +1888,15 @@ function OutputSettings({
 
 function LayerList({ doc }: { doc: Doc }) {
   const s = useStore();
+  const [dragged, setDragged] = useState<string | null>(null);
+  const [drop, setDrop] = useState<{
+    id: string;
+    edge: "before" | "after";
+  } | null>(null);
+  function clearDrag() {
+    setDragged(null);
+    setDrop(null);
+  }
   return (
     <div className="inspector-content">
       <div className="property-section">
@@ -1793,13 +1912,77 @@ function LayerList({ doc }: { doc: Doc }) {
               className={cn(
                 "layer-row",
                 s.selected.includes(l.id) && "selected",
+                dragged === l.id && "dragging",
+                drop?.id === l.id && `drop-${drop.edge}`,
               )}
+              onDragOver={(e) => {
+                if (!dragged || dragged === l.id || s.busy) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+                const rect = e.currentTarget.getBoundingClientRect();
+                setDrop({
+                  id: l.id,
+                  edge:
+                    e.clientY < rect.top + rect.height / 2 ? "before" : "after",
+                });
+              }}
+              onDragLeave={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget as Node | null))
+                  setDrop(null);
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                if (dragged && dragged !== l.id) {
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  s.reorder(
+                    dragged,
+                    l.id,
+                    e.clientY < rect.top + rect.height / 2 ? "before" : "after",
+                  );
+                }
+                clearDrag();
+              }}
             >
+              <button
+                className="layer-drag-handle"
+                draggable={!s.busy}
+                disabled={s.busy}
+                title="拖拽调整顺序，也可按 Alt + 上下方向键"
+                aria-label={`调整${l.name}的图层顺序`}
+                onDragStart={(e) => {
+                  e.dataTransfer.effectAllowed = "move";
+                  e.dataTransfer.setData("text/plain", l.id);
+                  e.dataTransfer.setDragImage(
+                    e.currentTarget.parentElement!,
+                    20,
+                    20,
+                  );
+                  setDragged(l.id);
+                }}
+                onDragEnd={clearDrag}
+                onKeyDown={(e) => {
+                  if (!e.altKey || !["ArrowUp", "ArrowDown"].includes(e.key))
+                    return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const layers = [...active(doc).layers].reverse();
+                  const index = layers.findIndex((x) => x.id === l.id);
+                  const next = layers[index + (e.key === "ArrowUp" ? -1 : 1)];
+                  if (next)
+                    s.reorder(
+                      l.id,
+                      next.id,
+                      e.key === "ArrowUp" ? "before" : "after",
+                    );
+                }}
+              >
+                <GripVertical size={14} />
+              </button>
               <button
                 className="layer-select"
                 onClick={(e) =>
                   s.select(
-                    e.shiftKey || e.ctrlKey
+                    e.shiftKey || e.ctrlKey || e.metaKey
                       ? s.selected.includes(l.id)
                         ? s.selected.filter((id) => id !== l.id)
                         : [...s.selected, l.id]
@@ -1828,7 +2011,7 @@ function LayerList({ doc }: { doc: Doc }) {
         })}
       </div>
       <div className="field-help px-4">
-        Shift / Ctrl 点击可多选。选中组件后按方向键微调位置。
+        拖动左侧手柄调整顺序。Shift / Ctrl 点击可多选。
       </div>
     </div>
   );

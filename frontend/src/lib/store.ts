@@ -24,11 +24,13 @@ interface Store {
   saved: number;
   error: string;
   busy: boolean;
+  textEditorOpen: boolean;
   edit: (fn: (doc: Doc) => void, history?: boolean) => void;
   select: (ids: string[]) => void;
   patch: (id: string, patch: Partial<Layer>, history?: boolean) => void;
   add: (kind: Kind) => void;
   remove: () => void;
+  reorder: (id: string, targetId: string, edge: "before" | "after") => void;
   undo: () => void;
   redo: () => void;
   accept: (doc: Doc) => void;
@@ -49,6 +51,7 @@ export const useStore = create<Store>((set, get) => ({
   saved: 0,
   error: "",
   busy: false,
+  textEditorOpen: false,
   edit: (fn, history = true) => {
     const s = get();
     if (!s.doc || s.busy) return;
@@ -71,6 +74,22 @@ export const useStore = create<Store>((set, get) => ({
     schedule();
   },
   select: (selected) => set({ selected }),
+  reorder: (id, targetId, edge) => {
+    const s = get();
+    if (!s.doc || s.busy || id === targetId) return;
+    // The inspector lists the frontmost layer first; rendering uses the reverse order.
+    const layers = [...active(s.doc).layers].reverse();
+    const from = layers.findIndex((l) => l.id === id);
+    if (from < 0 || !layers.some((l) => l.id === targetId)) return;
+    const [moved] = layers.splice(from, 1);
+    const to = layers.findIndex((l) => l.id === targetId);
+    layers.splice(to + (edge === "after" ? 1 : 0), 0, moved);
+    layers.reverse();
+    if (layers.every((l, i) => l.id === active(s.doc!).layers[i].id)) return;
+    s.edit((doc) => {
+      active(doc).layers = layers;
+    });
+  },
   patch: (id, patch, history = true) =>
     get().edit((doc) => {
       const l = active(doc).layers.find((l) => l.id === id);

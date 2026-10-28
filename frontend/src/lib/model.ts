@@ -1,4 +1,5 @@
 import type { DeepSeekState, DeepSeekPreferences } from "../shared/deepseek";
+import { validateRichText, utf8, type RichText } from "./rich-text";
 export type Kind =
   | "image"
   | "video"
@@ -24,9 +25,11 @@ export interface Layer {
   locked: boolean;
   color: string;
   text: string;
+  richText?: RichText;
   fontSize: number;
   fontFamily: string;
   align: "left" | "center" | "right";
+  verticalAlign?: "top" | "middle" | "bottom";
   bold: boolean;
   assetId?: string;
   sensorId?: string;
@@ -177,6 +180,7 @@ export function layer(kind: Kind): Layer {
     fontSize: 32,
     fontFamily: "Microsoft YaHei",
     align: "left",
+    verticalAlign: "middle",
     bold: false,
     min: 0,
     max: 100,
@@ -224,6 +228,16 @@ export function validate(doc: Doc) {
     if (s.layers.filter((l) => l.visible && l.type === "video").length > 1)
       throw Error("每个场景最多一个可见动态媒体图层");
     for (const l of s.layers) {
+      if (
+        l.verticalAlign !== undefined &&
+        !["top", "middle", "bottom"].includes(l.verticalAlign)
+      )
+        throw Error("垂直对齐无效");
+      if (utf8(l.text) > 16000) throw Error("文字过长");
+      if (l.richText) {
+        if (l.type !== "text") throw Error("只有文字组件支持混排");
+        validateRichText(l.richText);
+      }
       if (
         ![l.x, l.y, l.width, l.height, l.rotation, l.opacity].every(
           Number.isFinite,

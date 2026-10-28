@@ -246,6 +246,7 @@ pub fn run(store: Storage, simulate: bool) -> Result<()> {
                     prefs: &job.state.deepseek,
                     size: (scene.width, scene.height),
                     fit: Fit::Contain,
+                    direction: 0,
                     quality: 70,
                     format: FrameFormat::Rgba8,
                     now: pixelferry_services::now(),

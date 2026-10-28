@@ -1,6 +1,8 @@
 use anyhow::{bail, ensure, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+mod rich_text;
+pub use rich_text::*;
 
 pub const IPC_VERSION: u32 = 1;
 pub const MAX_SCENES: usize = 32;
@@ -129,9 +131,12 @@ pub struct Layer {
     pub locked: bool,
     pub color: String,
     pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rich_text: Option<RichText>,
     pub font_size: f32,
     pub font_family: String,
     pub align: String,
+    pub vertical_align: String,
     pub bold: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub asset_id: Option<String>,
@@ -165,9 +170,11 @@ impl Default for Layer {
             locked: false,
             color: "#e6efff".into(),
             text: "自定义文字".into(),
+            rich_text: None,
             font_size: 32.,
             font_family: "Microsoft YaHei".into(),
             align: "left".into(),
+            vertical_align: "middle".into(),
             bold: false,
             asset_id: None,
             sensor_id: None,
@@ -249,6 +256,10 @@ impl Layer {
             self.text.len() <= 16000 && self.name.len() <= 600 && self.font_family.len() <= 400,
             "文字过长"
         );
+        if let Some(rich) = &self.rich_text {
+            ensure!(self.kind == LayerKind::Text, "只有文字组件支持混排");
+            rich.validate()?;
+        }
         ensure!(
             valid_color(&self.color) && valid_color(&self.bar_background),
             "颜色无效"
@@ -256,6 +267,10 @@ impl Layer {
         ensure!(
             ["left", "center", "right"].contains(&self.align.as_str()),
             "对齐无效"
+        );
+        ensure!(
+            ["top", "middle", "bottom"].contains(&self.vertical_align.as_str()),
+            "垂直对齐无效"
         );
         ensure!(
             ["sensor", "deepseek-period"].contains(&self.bar_source.as_str())

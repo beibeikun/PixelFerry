@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react";
-import { api } from "@/lib/api";
+import { renderPreview } from "@/lib/preview";
 import { active, type Doc, type Layer, type Preview } from "@/lib/model";
 import {
   bounds,
@@ -45,6 +45,7 @@ export function PixelCanvas({
     [marquee, setMarquee] = useState<Box | null>(null);
   const drag = useRef<Drag | null>(null);
   const selected = useStore((s) => s.selected);
+  const textEditorOpen = useStore((s) => s.textEditorOpen);
   const scene = active(doc);
   const preview = mode === "output" ? output : editor;
   const width = mode === "output" && output ? output.width : scene.width,
@@ -69,12 +70,12 @@ export function PixelCanvas({
     return () => o.disconnect();
   }, []);
   useEffect(() => {
-    if (mode !== "edit") return;
+    if (mode !== "edit" || textEditorOpen) return;
     let alive = true,
       timer: ReturnType<typeof setTimeout>;
     const draw = async () => {
       try {
-        const p = await api.render(latest.current);
+        const p = await renderPreview(latest.current);
         if (alive) setEditor(p);
       } catch (e) {
         if (alive) useStore.setState({ error: `画面生成失败：${String(e)}` });
@@ -86,7 +87,7 @@ export function PixelCanvas({
       alive = false;
       clearTimeout(timer);
     };
-  }, [mode]);
+  }, [mode, textEditorOpen]);
   useEffect(() => {
     const c = canvas.current;
     if (!c || !preview) return;

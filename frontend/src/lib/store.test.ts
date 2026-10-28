@@ -42,6 +42,54 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("workspace transactions", () => {
+  it("reorders front-to-back layers with undo, redo, selection and saving", async () => {
+    const s = useStore.getState();
+    s.add("rect");
+    s.add("circle");
+    const original = useStore.getState().doc!.scenes[0].layers.map((l) => l.id);
+    const [back, middle, front] = original;
+    s.select([back]);
+    const history = useStore.getState().past.length;
+    s.reorder(back, front, "before");
+    expect(useStore.getState().doc!.scenes[0].layers.map((l) => l.id)).toEqual([
+      middle,
+      front,
+      back,
+    ]);
+    expect(useStore.getState().selected).toEqual([back]);
+    expect(useStore.getState().past).toHaveLength(history + 1);
+    s.undo();
+    expect(useStore.getState().doc!.scenes[0].layers.map((l) => l.id)).toEqual(
+      original,
+    );
+    s.redo();
+    await flush();
+    expect(
+      vi
+        .mocked(api.save)
+        .mock.calls.at(-1)![0]
+        .scenes[0].layers.map((l) => l.id),
+    ).toEqual([middle, front, back]);
+    s.reorder(back, middle, "after");
+    expect(useStore.getState().doc!.scenes[0].layers.map((l) => l.id)).toEqual([
+      back,
+      middle,
+      front,
+    ]);
+  });
+  it("ignores unchanged, invalid and busy layer drops", () => {
+    const s = useStore.getState();
+    s.add("rect");
+    const [back, front] = useStore.getState().doc!.scenes[0].layers;
+    const serial = useStore.getState().serial;
+    s.reorder(back.id, front.id, "after");
+    s.reorder(back.id, back.id, "before");
+    s.reorder("missing", front.id, "before");
+    s.reorder(back.id, "missing", "before");
+    useStore.setState({ busy: true });
+    s.reorder(back.id, front.id, "before");
+    expect(useStore.getState().serial).toBe(serial);
+  });
   it("undoes an entire drag transaction, then redoes it", () => {
     const s = useStore.getState(),
       before = s.doc!.scenes[0].layers[0].x;

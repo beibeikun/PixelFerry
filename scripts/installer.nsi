@@ -8,6 +8,8 @@ InstallDir "$LOCALAPPDATA\Programs\PixelFerry"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
 !define MUI_ABORTWARNING
+!define MUI_ICON "${PROJECT_ROOT}\crates\app\icons\icon.ico"
+!define MUI_UNICON "${PROJECT_ROOT}\crates\app\icons\icon.ico"
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
@@ -48,6 +50,7 @@ Section "PixelFerry" Main
   CreateShortcut "$SMPROGRAMS\PixelFerry\PixelFerry.lnk" "$INSTDIR\pixelferry.exe"
   CreateShortcut "$SMPROGRAMS\PixelFerry\Uninstall.lnk" "$INSTDIR\Uninstall.exe"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\PixelFerry" "DisplayName" "PixelFerry"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\PixelFerry" "DisplayIcon" "$INSTDIR\pixelferry.exe,0"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\PixelFerry" "DisplayVersion" "0.2.0"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\PixelFerry" "UninstallString" '$\"$INSTDIR\Uninstall.exe$\"'
 SectionEnd

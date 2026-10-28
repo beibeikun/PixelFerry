@@ -46,6 +46,16 @@ pub fn command(command: Control, value: u8) -> Result<Vec<u8>> {
     p[5] = value;
     Ok(p)
 }
+pub fn settings_commands(settings: &Settings) -> Result<[Vec<u8>; 3]> {
+    settings.validate()?;
+    Ok([
+        command(Control::Brightness, settings.brightness)?,
+        // Output frames already include the installation rotation. Reset firmware
+        // orientation on connect/update to prevent a second rotation of the JPEG.
+        command(Control::Direction, 0)?,
+        command(Control::Power, if settings.power { 0 } else { 1 })?,
+    ])
+}
 pub struct Lg600;
 impl Adapter for Lg600 {
     fn id(&self) -> &'static str {
@@ -109,5 +119,20 @@ mod tests {
         );
         assert!(command(Control::Direction, 4).is_err());
         assert!(packetize(&[0; 101]).is_err());
+    }
+    #[test]
+    fn software_rotation_does_not_rotate_again_in_firmware() {
+        for direction in 0..=3 {
+            let settings = Settings {
+                direction,
+                brightness: 65,
+                power: false,
+                ..Settings::default()
+            };
+            let packets = settings_commands(&settings).unwrap();
+            assert_eq!(packets[0], command(Control::Brightness, 65).unwrap());
+            assert_eq!(packets[1], command(Control::Direction, 0).unwrap());
+            assert_eq!(packets[2], command(Control::Power, 1).unwrap());
+        }
     }
 }

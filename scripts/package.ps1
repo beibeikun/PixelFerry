@@ -30,9 +30,11 @@ foreach ($crate in (Get-ChildItem $crateSources -Directory | Get-ChildItem -Dire
 }
 $skiaNotices=Get-ChildItem (Join-Path $projectRoot 'target/release/build') -Recurse -Filter 'LICENSE*' | Where-Object FullName -Match 'skia'
 foreach ($noticeFile in $skiaNotices) { Copy-Item -LiteralPath $noticeFile.FullName -Destination (Join-Path $portable 'Skia-LICENSE.txt') }
-$jsPackages=(Get-Content (Join-Path $projectRoot 'frontend/package-lock.json') -Raw | ConvertFrom-Json -AsHashtable).packages
-foreach ($packagePath in $jsPackages.Keys) {
-    if (!$packagePath.StartsWith('node_modules/')) {continue}
+# Node is already required for the frontend. Use it to read the lockfile because
+# Windows PowerShell 5.1 lacks -AsHashtable and cannot parse its empty root key.
+$jsPackagePaths=& node -e "const fs = require('node:fs'); const lock = JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); for (const name of Object.keys(lock.packages)) { if (name.startsWith('node_modules/')) console.log(name); }" (Join-Path $projectRoot 'frontend/package-lock.json')
+if ($LASTEXITCODE -ne 0) { throw 'Failed to read frontend dependency licenses from package-lock.json.' }
+foreach ($packagePath in $jsPackagePaths) {
     $packageRoot=Join-Path (Join-Path $projectRoot 'frontend') $packagePath
     $jsNotices=@(Get-ChildItem -LiteralPath $packageRoot -File -ErrorAction SilentlyContinue | Where-Object Name -Match '^(LICENSE|COPYING|NOTICE|UNLICENSE)')
     if ($jsNotices.Count -gt 0) {
@@ -40,6 +42,14 @@ foreach ($packagePath in $jsPackages.Keys) {
         New-Item -ItemType Directory -Force -Path $jsDestination | Out-Null
         foreach ($notice in $jsNotices) {Copy-Item -LiteralPath $notice.FullName -Destination $jsDestination}
     }
+}
+# ZIP timestamps must be between 1980 and 2107. Dependency license files can
+# retain older dates; normalize only the copied release files, not their sources.
+$zipMinimum=[datetime]::new(1980,1,1,0,0,0)
+$zipMaximum=[datetime]::new(2107,12,31,23,59,58)
+foreach ($item in (Get-ChildItem -LiteralPath $portable -Recurse -Force)) {
+    if ($item.LastWriteTime -lt $zipMinimum) { $item.LastWriteTime=$zipMinimum }
+    elseif ($item.LastWriteTime -gt $zipMaximum) { $item.LastWriteTime=$zipMaximum }
 }
 Compress-Archive -LiteralPath $portable -DestinationPath (Join-Path $projectRoot 'release/PixelFerry-0.2.0-win-x64.zip') -Force
 if (!$MakeNsis) {

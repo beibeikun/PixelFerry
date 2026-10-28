@@ -421,6 +421,11 @@ pub fn worker(store: &Storage) -> Result<()> {
                     prefs: &c.state.deepseek,
                     size: (screen.width, screen.height),
                     fit: binding.fit,
+                    direction: if screen.direction {
+                        binding.settings.direction
+                    } else {
+                        0
+                    },
                     quality: binding.settings.quality,
                     format: screen.encoding,
                     now: services::now(),
@@ -671,7 +676,7 @@ pub fn self_test(store: &Storage) -> Result<()> {
         }
     }
     let _stop = Stop(store.root.clone());
-    ipc::request(&store.root, Request::SetState(state))?;
+    ipc::request(&store.root, Request::SetState(state.clone()))?;
     let mut last = Response::default();
     for (index, device) in simulated.iter().enumerate() {
         for screen in &device.screens {
@@ -710,6 +715,143 @@ pub fn self_test(store: &Storage) -> Result<()> {
                 == 5,
         "五屏并行运行失败"
     );
+    // An asymmetric marker verifies settings propagation through IPC and the
+    // actual render worker, including changes while the device stays connected.
+    let scene_id = state.bindings[0].scene_id.clone();
+    let scene = state.scenes.iter_mut().find(|s| s.id == scene_id).unwrap();
+    scene.background = "#000000".into();
+    scene.layers.push(Layer {
+        x: 0.,
+        y: 0.,
+        width: 120.,
+        height: 120.,
+        color: "#ff0000".into(),
+        corner_radius: 0.,
+        ..Layer::new(LayerKind::Rect)
+    });
+    let device = &simulated[0];
+    let screen = &device.screens[0];
+    for direction in 0..=3 {
+        state.bindings[0].settings.direction = direction;
+        ipc::request(&store.root, Request::SetState(state.clone()))?;
+        let start = Instant::now();
+        let mut valid = false;
+        while start.elapsed() < Duration::from_secs(15) {
+            last = ipc::request(
+                &store.root,
+                Request::Snapshot {
+                    preview: Some((device.id.clone(), screen.id.clone())),
+                },
+            )?;
+            if let Some(preview) = &last.preview {
+                let bytes = base64::engine::general_purpose::STANDARD.decode(&preview.rgba)?;
+                if (preview.width, preview.height) == (480, 480) {
+                    valid = [(60, 60), (420, 60), (420, 420), (60, 420)]
+                        .iter()
+                        .enumerate()
+                        .all(|(corner, &(x, y))| {
+                            let i = (y * 480 + x) * 4;
+                            let expected = if corner == direction as usize {
+                                [255, 0, 0, 255]
+                            } else {
+                                [0, 0, 0, 255]
+                            };
+                            bytes.get(i..i + 4) == Some(&expected)
+                        });
+                }
+            }
+            if valid {
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        ensure!(
+            valid,
+            "安装方向 {}° 的后台输出画面不匹配",
+            u16::from(direction) * 90
+        );
+    }
+    // Compare a mixed-text frame against a local render, through the real IPC
+    // worker path, without requiring account credentials or physical sensors.
+    let scene = state.scenes.iter_mut().find(|s| s.id == scene_id).unwrap();
+    scene.layers.push(Layer {
+        x: 120.,
+        y: 180.,
+        width: 300.,
+        height: 180.,
+        text: "余额：[DeepSeek · 余额]".into(),
+        vertical_align: "bottom".into(),
+        rich_text: Some(RichText {
+            version: 1,
+            runs: vec![
+                RichRun::Text {
+                    text: "余额：".into(),
+                    style: RichStyle {
+                        color: Some("#ffcc00".into()),
+                        ..Default::default()
+                    },
+                },
+                RichRun::Deepseek {
+                    metric: "balance".into(),
+                    decimals: 2,
+                    show_currency: true,
+                    affix_scale: None,
+                    style: RichStyle::default(),
+                },
+                RichRun::Text {
+                    text: "\nGPU：".into(),
+                    style: RichStyle::default(),
+                },
+                RichRun::Sensor {
+                    sensor_id: "__selftest_missing_sensor__".into(),
+                    label: "测试传感器".into(),
+                    decimals: 1,
+                    show_unit: true,
+                    affix_scale: None,
+                    style: RichStyle {
+                        font_size: Some(40.),
+                        ..Default::default()
+                    },
+                },
+            ],
+        }),
+        ..Layer::new(LayerKind::Text)
+    });
+    let expected = Renderer::new(&store.media(), &default_tools())
+        .render(pixelferry_render::RenderRequest {
+            scene,
+            assets: &state.assets,
+            data: &DataSnapshot::default(),
+            prefs: &state.deepseek,
+            size: (480, 480),
+            fit: Fit::Contain,
+            direction: 0,
+            quality: 70,
+            format: FrameFormat::Jpeg,
+            now: services::now(),
+        })?
+        .rgba;
+    state.bindings[0].settings.direction = 0;
+    ipc::request(&store.root, Request::SetState(state.clone()))?;
+    let start = Instant::now();
+    let mut mixed_valid = false;
+    while start.elapsed() < Duration::from_secs(15) {
+        last = ipc::request(
+            &store.root,
+            Request::Snapshot {
+                preview: Some((device.id.clone(), screen.id.clone())),
+            },
+        )?;
+        if let Some(preview) = &last.preview {
+            mixed_valid =
+                base64::engine::general_purpose::STANDARD.decode(&preview.rgba)? == expected;
+        }
+        if mixed_valid {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    ensure!(mixed_valid, "混排文字的后台输出画面不匹配");
     let before: BTreeMap<_, _> = last
         .statuses
         .iter()
@@ -741,7 +883,7 @@ pub fn self_test(store: &Storage) -> Result<()> {
         thread::sleep(Duration::from_millis(100));
     }
     ensure!(recovered, "设备进程异常退出后的隔离与恢复失败");
-    let report = serde_json::json!({"passed":true,"devices":3,"screens":5,"independentPixels":true,"workerCrashRecovery":true,"statuses":last.statuses});
+    let report = serde_json::json!({"passed":true,"devices":3,"screens":5,"independentPixels":true,"installationDirections":true,"mixedText":true,"workerCrashRecovery":true,"statuses":last.statuses});
     std::fs::write(
         store.root.join("selftest.json"),
         serde_json::to_vec_pretty(&report)?,

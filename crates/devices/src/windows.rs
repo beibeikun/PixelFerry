@@ -1,8 +1,5 @@
 //! Read-only enumeration; no device is opened for writing until connect is requested.
-use crate::{
-    lg600::{self, Control},
-    Connection, FramePump, PacketOutput,
-};
+use crate::{lg600, Connection, FramePump, PacketOutput};
 use anyhow::{bail, ensure, Context, Result};
 use pixelferry_core::*;
 use sha2::{Digest, Sha256};
@@ -419,13 +416,7 @@ impl Connection for LgConnection {
     }
     fn controls(&mut self, screen: &ScreenId, s: &Settings) -> Result<()> {
         ensure!(screen.0 == "lcd", "未知 LG600 屏幕");
-        s.validate()?;
-        for (op, value) in [
-            (Control::Brightness, s.brightness),
-            (Control::Direction, s.direction),
-            (Control::Power, if s.power { 0 } else { 1 }),
-        ] {
-            let p = lg600::command(op, value)?;
+        for p in lg600::settings_commands(s)? {
             if self.command.write(&p)? != p.len() {
                 bail!("命令口短写")
             }

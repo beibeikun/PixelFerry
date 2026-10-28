@@ -355,6 +355,81 @@ mod tests {
         assert_eq!(next.scenes[1].width, 480);
     }
     #[test]
+    fn mixed_text_survives_save_load_and_package_import_without_sampling_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Storage::new(dir.path()).unwrap();
+        let mut state = AppState::default();
+        let mut layer = Layer::new(LayerKind::Text);
+        layer.text = "余额：[DeepSeek · 余额]".into();
+        layer.vertical_align = "bottom".into();
+        let rich = RichText {
+            version: 1,
+            runs: vec![
+                RichRun::Text {
+                    text: "余额：".into(),
+                    style: RichStyle::default(),
+                },
+                RichRun::Deepseek {
+                    metric: "balance".into(),
+                    decimals: 2,
+                    show_currency: true,
+                    affix_scale: Some(0.7),
+                    style: RichStyle {
+                        font_size: Some(48.),
+                        color: Some("#ffcc00".into()),
+                        ..Default::default()
+                    },
+                },
+                RichRun::Sensor {
+                    sensor_id: "afterburner:stable:0".into(),
+                    label: "GPU 温度".into(),
+                    decimals: 1,
+                    show_unit: true,
+                    affix_scale: Some(0.5),
+                    style: RichStyle::default(),
+                },
+            ],
+        };
+        layer.rich_text = Some(rich.clone());
+        state.scenes[0].layers.push(layer);
+        store.save(&state).unwrap();
+        assert_eq!(
+            store.load().unwrap().scenes[0]
+                .layers
+                .last()
+                .unwrap()
+                .rich_text
+                .as_ref(),
+            Some(&rich)
+        );
+        let file = dir.path().join("mixed.pixelferry");
+        export(&store, &state, &file, true).unwrap();
+        let imported = import(&store, &state, &file).unwrap();
+        assert_eq!(
+            imported
+                .scenes
+                .last()
+                .unwrap()
+                .layers
+                .last()
+                .unwrap()
+                .vertical_align,
+            "bottom"
+        );
+        assert_eq!(
+            imported
+                .scenes
+                .last()
+                .unwrap()
+                .layers
+                .last()
+                .unwrap()
+                .rich_text
+                .as_ref(),
+            Some(&rich)
+        );
+    }
+    #[test]
     fn rejects_traversal_without_mutation() {
         let dir = tempfile::tempdir().unwrap();
         let store = Storage::new(dir.path()).unwrap();
