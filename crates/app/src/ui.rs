@@ -20,6 +20,7 @@ struct Backend {
 struct RenderJob {
     state: AppState,
     data: DataSnapshot,
+    scene_id: Option<String>,
     reply: mpsc::SyncSender<ApiResult<Preview>>,
 }
 fn err(e: impl std::fmt::Display) -> String {
@@ -79,6 +80,7 @@ async fn render_editor(state: tauri::State<'_, Backend>, doc: AppState) -> ApiRe
             .send(RenderJob {
                 state: doc,
                 data: b.data.lock().map_err(err)?.clone(),
+                scene_id: None,
                 reply: tx,
             })
             .map_err(err)?;
@@ -87,6 +89,133 @@ async fn render_editor(state: tauri::State<'_, Backend>, doc: AppState) -> ApiRe
     })
     .await
     .map_err(err)?
+}
+#[tauri::command]
+async fn render_thumbnail(
+    state: tauri::State<'_, Backend>,
+    doc: AppState,
+    scene_id: String,
+) -> ApiResult<Preview> {
+    let b = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        doc.validate().map_err(err)?;
+        if !doc.scenes.iter().any(|s| s.id.0 == scene_id) {
+            return Err("场景不存在".into());
+        }
+        let (tx, rx) = mpsc::sync_channel(1);
+        b.render
+            .send(RenderJob {
+                state: doc,
+                data: b.data.lock().map_err(err)?.clone(),
+                scene_id: Some(scene_id),
+                reply: tx,
+            })
+            .map_err(err)?;
+        rx.recv_timeout(std::time::Duration::from_secs(15))
+            .map_err(err)?
+    })
+    .await
+    .map_err(err)?
+}
+fn thumbnail_size(width: u32, height: u32) -> (u32, u32) {
+    let scale = (320. / width.max(height) as f64).min(1.);
+    (
+        (width as f64 * scale).round().max(1.) as u32,
+        (height as f64 * scale).round().max(1.) as u32,
+    )
+}
+#[cfg(test)]
+mod thumbnail_tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn thumbnail_dimensions_preserve_landscape_portrait_and_small_scenes() {
+        assert_eq!(thumbnail_size(1920, 1080), (320, 180));
+        assert_eq!(thumbnail_size(1080, 1920), (180, 320));
+        assert_eq!(thumbnail_size(480, 480), (320, 320));
+        assert_eq!(thumbnail_size(10, 20), (10, 20));
+        assert_eq!(thumbnail_size(8192, 1), (320, 1));
+    }
+
+    #[test]
+    fn renders_requested_scene_without_changing_document_or_bindings() {
+        let mut state = AppState::default();
+        state.scenes = vec![
+            Scene::blank("red", 640, 320),
+            Scene::blank("blue", 320, 640),
+        ];
+        state.scenes[0].background = "#ff0000".into();
+        state.scenes[1].background = "#0000ff".into();
+        state.active_scene_id = state.scenes[0].id.clone();
+        let saved = serde_json::to_value(&state).unwrap();
+        let mut renderer = Renderer::new(Path::new("."), Path::new("."));
+        let data = DataSnapshot::default();
+        for (index, color) in [(0, [255, 0, 0, 255]), (1, [0, 0, 255, 255])] {
+            let frame = render_scene(
+                &state,
+                &data,
+                Some(&state.scenes[index].id.0),
+                &mut renderer,
+            )
+            .unwrap();
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(&frame.rgba)
+                .unwrap();
+            assert_eq!(
+                (frame.width, frame.height),
+                if index == 0 { (320, 160) } else { (160, 320) }
+            );
+            assert!(bytes.chunks_exact(4).all(|p| p == color));
+        }
+        assert!(render_scene(&state, &data, Some("missing"), &mut renderer).is_err());
+        assert_eq!(serde_json::to_value(&state).unwrap(), saved);
+        let editor = render_scene(&state, &data, None, &mut renderer).unwrap();
+        assert_eq!((editor.width, editor.height), (640, 320));
+    }
+}
+fn render_scene(
+    state: &AppState,
+    data: &DataSnapshot,
+    scene_id: Option<&str>,
+    renderer: &mut Renderer,
+) -> ApiResult<Preview> {
+    let scene = match scene_id {
+        Some(id) => state
+            .scenes
+            .iter()
+            .find(|s| s.id.0 == id)
+            .ok_or("场景不存在")?,
+        None => state.active_scene(),
+    };
+    let request = RenderRequest {
+        scene,
+        assets: &state.assets,
+        data,
+        prefs: &state.deepseek,
+        size: if scene_id.is_some() {
+            thumbnail_size(scene.width, scene.height)
+        } else {
+            (scene.width, scene.height)
+        },
+        fit: Fit::Contain,
+        direction: 0,
+        quality: 70,
+        format: FrameFormat::Rgba8,
+        now: pixelferry_services::now(),
+    };
+    let frame = if scene_id.is_some() {
+        renderer.render_thumbnail(request)
+    } else {
+        renderer.render(request)
+    }
+    .map_err(err)?;
+    Ok(Preview {
+        width: frame.width,
+        height: frame.height,
+        rgba: base64::engine::general_purpose::STANDARD.encode(frame.rgba),
+        sequence: pixelferry_services::now() as u64,
+    })
 }
 #[tauri::command]
 async fn import_media(state: tauri::State<'_, Backend>) -> ApiResult<Option<Asset>> {
@@ -236,28 +365,14 @@ pub fn run(store: Storage, simulate: bool) -> Result<()> {
     let tools = storage::default_tools();
     std::thread::spawn(move || {
         let mut renderer = Renderer::new(&media, &tools);
+        let mut thumbnails = Renderer::new(&media, &tools);
         while let Ok(job) = rx.recv() {
-            let scene = job.state.active_scene();
-            let result = renderer
-                .render(RenderRequest {
-                    scene,
-                    assets: &job.state.assets,
-                    data: &job.data,
-                    prefs: &job.state.deepseek,
-                    size: (scene.width, scene.height),
-                    fit: Fit::Contain,
-                    direction: 0,
-                    quality: 70,
-                    format: FrameFormat::Rgba8,
-                    now: pixelferry_services::now(),
-                })
-                .map(|f| Preview {
-                    width: f.width,
-                    height: f.height,
-                    rgba: base64::engine::general_purpose::STANDARD.encode(f.rgba),
-                    sequence: pixelferry_services::now() as u64,
-                })
-                .map_err(err);
+            let target = if job.scene_id.is_some() {
+                &mut thumbnails
+            } else {
+                &mut renderer
+            };
+            let result = render_scene(&job.state, &job.data, job.scene_id.as_deref(), target);
             let _ = job.reply.send(result);
         }
     });
@@ -274,6 +389,7 @@ pub fn run(store: Storage, simulate: bool) -> Result<()> {
             save_workspace,
             snapshot,
             render_editor,
+            render_thumbnail,
             import_media,
             export_scenes,
             import_scenes,

@@ -77,6 +77,7 @@ import {
 } from "@/components/ui/tooltip";
 import { Textarea } from "@/components/ui/textarea";
 import { PixelCanvas } from "@/components/Canvas";
+import { SceneLibrary } from "@/components/SceneLibrary";
 import { convertToRichText, plainSummary } from "@/lib/rich-text";
 import { api, native } from "@/lib/api";
 import {
@@ -582,127 +583,86 @@ export function App() {
           </div>
         ) : (
           <div className="app-content">
-            <aside className="library-panel">
-              <div className="library-heading">
-                <div>
-                  <span className="eyebrow">YOUR LITTLE WORLD</span>
-                  <h2>
-                    {route === "studio"
-                      ? "场景航线"
-                      : route === "devices"
-                        ? "设备港口"
-                        : "素材行李箱"}
-                  </h2>
-                </div>
-                {route === "studio" ? (
-                  <IconButton
-                    title="新建场景"
-                    disabled={s.busy || doc.scenes.length >= 32}
-                    onClick={() => {
-                      s.edit((d) => {
-                        const current = active(d),
-                          scene = blankScene(current.width, current.height);
-                        d.scenes.push(scene);
-                        d.activeSceneId = scene.id;
-                      });
-                      s.select([]);
-                      setMode("edit");
-                    }}
-                  >
-                    <Plus />
-                  </IconButton>
-                ) : (
+            <aside
+              className={cn(
+                "library-panel",
+                route === "studio" && "library-studio",
+              )}
+            >
+              {route !== "studio" && (
+                <div className="library-heading">
+                  <div>
+                    <span className="eyebrow">YOUR LITTLE WORLD</span>
+                    <h2>{route === "devices" ? "设备港口" : "素材行李箱"}</h2>
+                  </div>
                   <Ship className="soft-icon" size={25} />
-                )}
-              </div>
+                </div>
+              )}
               {route === "studio" ? (
-                <>
-                  <div className="scene-list">
-                    {doc.scenes.map((scene, index) => (
-                      <button
-                        key={scene.id}
-                        className={cn(
-                          "scene-card",
-                          scene.id === doc.activeSceneId && "selected",
-                        )}
+                <SceneLibrary
+                  doc={doc}
+                  busy={s.busy}
+                  icons={icons}
+                  onNew={() => {
+                    s.edit((d) => {
+                      const current = active(d),
+                        scene = blankScene(current.width, current.height);
+                      d.scenes.push(scene);
+                      d.activeSceneId = scene.id;
+                    });
+                    s.select([]);
+                    setMode("edit");
+                  }}
+                  onSelect={(id) => {
+                    if (id !== doc.activeSceneId) {
+                      s.edit((d) => {
+                        d.activeSceneId = id;
+                      }, false);
+                      s.select([]);
+                    }
+                    setMode("edit");
+                  }}
+                  onAdd={(kind) => {
+                    s.add(kind);
+                    setMode("edit");
+                  }}
+                  footer={
+                    <div className="library-footer">
+                      <Button
+                        variant="outline"
+                        onClick={() => void exchange("import")}
                         disabled={s.busy}
-                        onClick={() => {
-                          s.edit((d) => {
-                            d.activeSceneId = scene.id;
-                          }, false);
-                          s.select([]);
-                          setMode("edit");
-                        }}
                       >
-                        <div
-                          className="scene-thumbnail"
-                          style={{ background: scene.background }}
-                        >
-                          <span>
-                            {scene.layers
-                              .find((l) => l.type === "text")
-                              ?.text.slice(0, 25) || "新世界"}
-                          </span>
-                          <small>
-                            {scene.layers.some((l) => l.type === "video") ? (
-                              <Video size={13} />
-                            ) : (
-                              <Waves size={18} />
-                            )}
-                          </small>
-                        </div>
-                        <div className="scene-card-title">
-                          <span>{scene.name}</span>
-                          {scene.id === doc.activeSceneId ? (
-                            <Check size={14} />
-                          ) : (
-                            <span className="scene-index">
-                              {String(index + 1).padStart(2, "0")}
-                            </span>
-                          )}
-                        </div>
-                        <span className="muted text-xs">
-                          {scene.width} × {scene.height} · {scene.layers.length}{" "}
-                          个组件
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                  <div className="library-footer">
-                    <Button
-                      variant="outline"
-                      onClick={() => void exchange("import")}
-                      disabled={s.busy}
-                    >
-                      <Download size={15} />
-                      导入场景包
-                    </Button>
-                    <label className="export-scope">
-                      <input
-                        type="checkbox"
-                        checked={exportAll}
-                        onChange={(e) => setExportAll(e.target.checked)}
-                      />
-                      导出全部场景
-                    </label>
-                    <Button
-                      variant="ghost"
-                      onClick={() => void exchange("export")}
-                      disabled={s.busy}
-                    >
-                      <Upload size={15} />
-                      导出{exportAll ? "全部" : "当前"}场景
-                    </Button>
-                    <div className="ferry-tip">
-                      <Anchor size={18} />
-                      <p>
-                        每一块小屏幕，
-                        <br />
-                        都值得一个自己的世界。
-                      </p>
+                        <Download size={15} />
+                        导入场景包
+                      </Button>
+                      <label className="export-scope">
+                        <input
+                          type="checkbox"
+                          checked={exportAll}
+                          onChange={(e) => setExportAll(e.target.checked)}
+                        />
+                        导出全部场景
+                      </label>
+                      <Button
+                        variant="ghost"
+                        onClick={() => void exchange("export")}
+                        disabled={s.busy}
+                      >
+                        <Upload size={15} />
+                        导出{exportAll ? "全部" : "当前"}场景
+                      </Button>
+                      <div className="ferry-tip">
+                        <Anchor size={18} />
+                        <p>
+                          每一块小屏幕，
+                          <br />
+                          都值得一个自己的世界。
+                        </p>
+                      </div>
                     </div>
-                  </div>
-                </>
+                  }
+                />
               ) : (
                 <>
                   <div className="library-info">

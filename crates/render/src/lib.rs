@@ -231,6 +231,44 @@ impl Renderer {
             self.notices.push(message.into());
         }
     }
+    /// Capture a video frame without leaving decoders running in the scene list.
+    /// A separate renderer keeps this sampling independent of the editor video.
+    pub fn render_thumbnail(&mut self, request: RenderRequest<'_>) -> Result<Frame> {
+        for layer in request
+            .scene
+            .layers
+            .iter()
+            .filter(|l| l.visible && l.kind == LayerKind::Video)
+        {
+            if let Some(asset) = layer
+                .asset_id
+                .as_ref()
+                .and_then(|id| request.assets.iter().find(|a| &a.id == id))
+            {
+                self.image(asset);
+            }
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(750);
+        while self
+            .videos
+            .values()
+            .any(|v| v.latest.lock().unwrap().is_none())
+            && std::time::Instant::now() < deadline
+        {
+            thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let pending = self
+            .videos
+            .values()
+            .any(|v| v.latest.lock().unwrap().is_none());
+        let result = if pending {
+            Err(anyhow::anyhow!("视频采样超时，请重试"))
+        } else {
+            self.render(request)
+        };
+        self.videos.clear();
+        result
+    }
     pub fn render(&mut self, request: RenderRequest<'_>) -> Result<Frame> {
         let RenderRequest {
             scene,
@@ -587,6 +625,116 @@ fn vertical_offset(align: &str, height: f32, text_height: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn thumbnail_samples_media_rich_text_and_releases_video_decoders() {
+        let root = std::env::temp_dir().join(format!("pixelferry-thumbnail-{}", new_id()));
+        fs::create_dir_all(&root).unwrap();
+        let tools = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/tools");
+        let mut command = Command::new(tools.join("ffmpeg.exe"));
+        quiet(&mut command);
+        let output = command
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=red:s=64x64:r=10",
+                "-t",
+                "0.5",
+                "-pix_fmt",
+                "yuv420p",
+                "-y",
+            ])
+            .arg(root.join("sample.mp4"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let mut surface = sk::surfaces::raster_n32_premul((8, 8)).unwrap();
+        surface.canvas().clear(Color::GREEN);
+        let png = surface
+            .image_snapshot()
+            .encode(None, EncodedImageFormat::PNG, 100)
+            .unwrap();
+        fs::write(root.join("sample.png"), png.as_bytes()).unwrap();
+        let assets = vec![
+            Asset {
+                id: "image".into(),
+                name: "image".into(),
+                file: "sample.png".into(),
+                kind: "image".into(),
+                width: 8,
+                height: 8,
+                duration: None,
+            },
+            Asset {
+                id: "video".into(),
+                name: "video".into(),
+                file: "sample.mp4".into(),
+                kind: "video".into(),
+                width: 64,
+                height: 64,
+                duration: Some(0.5),
+            },
+        ];
+        let mut scene = Scene::blank("media", 480, 240);
+        for (index, kind) in [LayerKind::Image, LayerKind::Video].into_iter().enumerate() {
+            scene.layers.push(Layer {
+                x: index as f32 * 240.,
+                y: 0.,
+                width: 240.,
+                height: 240.,
+                asset_id: Some(assets[index].id.clone()),
+                ..Layer::new(kind)
+            });
+        }
+        scene.layers.push(Layer {
+            x: 0.,
+            y: 0.,
+            width: 480.,
+            height: 60.,
+            font_size: 40.,
+            rich_text: Some(RichText {
+                version: 1,
+                runs: vec![RichRun::Text {
+                    text: "Thumbnail".into(),
+                    style: RichStyle {
+                        color: Some("#ffffff".into()),
+                        ..Default::default()
+                    },
+                }],
+            }),
+            ..Layer::new(LayerKind::Text)
+        });
+        let mut renderer = Renderer::new(&root, &tools);
+        let frame = renderer
+            .render_thumbnail(RenderRequest {
+                scene: &scene,
+                assets: &assets,
+                data: &DataSnapshot::default(),
+                prefs: &DeepSeekPreferences::default(),
+                size: (320, 160),
+                fit: Fit::Contain,
+                direction: 0,
+                quality: 70,
+                format: FrameFormat::Rgba8,
+                now: 1000,
+            })
+            .unwrap();
+        let pixel = |x: usize, y: usize| &frame.rgba[(y * 320 + x) * 4..(y * 320 + x) * 4 + 4];
+        assert_eq!(pixel(40, 120), &[0, 255, 0, 255]);
+        assert!(pixel(280, 120)[0] > 240 && pixel(280, 120)[1] < 15);
+        assert!(frame
+            .rgba
+            .chunks_exact(4)
+            .any(|p| p[0] > 230 && p[1] > 230 && p[2] > 230));
+        assert!(renderer.videos.is_empty());
+        fs::remove_dir_all(&root).unwrap();
+    }
     #[test]
     fn horizontal_and_vertical_text_alignment_are_independent() {
         let mut scene = Scene::blank("alignment", 320, 160);

@@ -10,6 +10,8 @@ export const api = {
       screen: screen ?? null,
     }),
   render: (doc: Doc) => invoke<Preview>("render_editor", { doc }),
+  thumbnail: (doc: Doc, sceneId: string) =>
+    invoke<Preview>("render_thumbnail", { doc, sceneId }),
   media: () => invoke<Asset | null>("import_media"),
   export: (doc: Doc, all: boolean) =>
     invoke<boolean>("export_scenes", { doc, all }),
